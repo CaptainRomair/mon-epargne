@@ -1,4 +1,4 @@
-/* Mon Épargne — v0.1 (premier test)
+/* Mon Épargne — v0.2
  * Application web locale : toutes les données restent dans le navigateur du téléphone (localStorage).
  */
 'use strict';
@@ -314,7 +314,8 @@ function viewHome() {
   h += `<section class="sec" aria-label="Plateformes"><div class="sec-h"><h2 class="h2">Plateformes</h2><span class="lbl">valeur · part</span></div>`;
   for (const x of vals) {
     const pf = PF(x.id);
-    const nx = D.dues.filter((d) => d.pf === pf.id && d.date >= TODAY).sort((a, b) => a.date.localeCompare(b.date))[0];
+    const fut = D.dues.filter((d) => d.pf === pf.id && d.date >= TODAY).sort((a, b) => a.date.localeCompare(b.date));
+    const nx = fut[0] ? { date: fut[0].date, int: r2(sum(fut.filter((d) => d.date === fut[0].date), 'int')), cap: r2(sum(fut.filter((d) => d.date === fut[0].date), 'cap')) } : null;
     const lt = lateProjects(pf.id).length;
     const dp = dispo(pf.id);
     h += `<button type="button" class="pfrow" data-go="projects" data-filter="${pf.id}">
@@ -411,6 +412,7 @@ function stepPlatform(h, k, pfId, step, order) {
       <span class="amtcol"><span>${money(dueAmount(d))}</span><span class="stat" style="font-size:10.5px;color:${rec ? 'var(--ok)' : 'var(--mu)'}">${rec ? 'Reçu' : 'À recevoir'}</span></span></div></div>`;
   }
   if (c.dues.length) h += `<span class="xs mu" style="display:flex;align-items:center;gap:6px;padding-top:10px">${svg('arrow', 16)}Balayer vers la droite ou toucher la case</span>`;
+  if (c.dues.length >= 3 && c.got < c.dues.length) h += `<button type="button" class="linkbtn" data-action="mark-all" style="margin-top:4px">Tout marquer reçu (${c.dues.length - c.got} · ${eur(r2(sum(c.dues.filter((d) => !dr.rec[d.id]), dueAmount)))})</button>`;
   h += `<button type="button" class="linkbtn" data-action="add-due" style="margin-top:8px">+ Échéance non prévue</button>`;
   const late = lateProjects(pfId);
   if (late.length) {
@@ -540,7 +542,7 @@ function viewProjects() {
 function nextDueOf(p) { return D.dues.filter((d) => d.project === p.id && d.date >= TODAY).sort((a, b) => a.date.localeCompare(b.date))[0]; }
 function projCard(p) {
   const sev = p.late ? (p.late.count >= 6 ? 'er' : 'wa') : null;
-  const chip = p.status === 'rembourse' ? '<span class="chip out">Remboursé</span>' : sev ? `<span class="chip ${sev}">Retard · ${p.late.count} éch.</span>` : '<span class="chip mu">En cours</span>';
+  const chip = p.status === 'rembourse' ? '<span class="chip out">Remboursé</span>' : sev ? `<span class="chip ${sev}">Retard · ${p.late.count} éch.</span>` : p.status === 'attente' ? '<span class="chip ac">En attente</span>' : '<span class="chip mu">En cours</span>';
   const nx = nextDueOf(p);
   const cl = capLeft(p);
   let prog = '';
@@ -552,7 +554,7 @@ function projCard(p) {
   const left = p.end ? Math.max(0, Math.round((Date.parse(p.end) - Date.parse(TODAY)) / (30.44 * 864e5))) : null;
   return `<button type="button" class="pcard ${sev || ''}" data-proj="${p.id}">
     <span class="top"><span class="nm">${esc(p.name)}</span>${chip}</span>
-    <span class="small mu" style="display:flex;align-items:center;gap:7px"><span class="sw dot-${p.pf}" style="width:8px;height:8px"></span>${esc(PF(p.pf).name)} · ${p.note ? esc(p.note) : eur(p.amount)} · ${pct(p.rate)}${p.type ? ' · ' + TYPES[p.type].title.toLowerCase() : ''}</span>
+    <span class="small mu" style="display:flex;align-items:center;gap:7px"><span class="sw dot-${p.pf}" style="width:8px;height:8px;flex:none"></span><span>${esc(p.company || PF(p.pf).name)} · ${p.note ? esc(p.note) : eur(p.amount)} · ${pct(p.rate)}${p.type ? ' · ' + TYPES[p.type].title.toLowerCase() : ''}</span></span>
     ${p.status === 'rembourse' ? '' : `<span class="two"><span class="stack" style="gap:2px"><span class="lbl">Capital restant</span><span style="font-size:15px;font-weight:700">${cl === null || cl === undefined ? '<span class="mu" style="font-weight:500">à saisir</span>' : eur(cl)}</span></span>
       <span class="stack" style="gap:2px"><span class="lbl">Prochaine échéance</span><span style="font-size:14px">${nx ? `${eur(dueAmount(nx))} · ${fmtDay(nx.date)}` : p.end ? 'à la fin du projet' : '—'}</span></span></span>
       ${prog}<span class="m xs mu" style="display:flex;justify-content:space-between"><span>${p.end ? 'fin ' + shortDate(p.end) : 'date de fin à saisir'}</span><span>${left !== null ? left + ' mois restants' : ''}</span></span>`}
@@ -633,13 +635,14 @@ function viewSettings() {
     <span class="xs mu" style="padding-top:8px">Ajouter, renommer ou archiver une plateforme : prochaine version.</span></section>`;
   h += `<section class="sec" style="padding-top:26px"><h2 class="lbl" style="margin:0 0 6px">Fiscalité</h2><div class="kv" style="border-top:1px solid var(--ln)"><span>Mode d'imposition</span><strong>Flat tax · 31,4 %</strong></div><button type="button" class="setrow" data-go="impots"><span>Impôts ${TODAY.slice(0, 4)}</span><span class="mu">${svg('right')}</span></button></section>`;
   h += `<section class="sec" style="padding-top:26px"><h2 class="lbl" style="margin:0 0 6px">Données</h2><div style="border-top:1px solid var(--ln)">
+    <label class="setrow" style="cursor:pointer"><span style="display:flex;align-items:center;gap:12px">${svg('up', 22, 1.8)}<span class="stack" style="gap:1px"><span>Importer un export BienPrêter</span><span class="xs mu">${D.lastImport && D.lastImport.bp ? 'Dernier import : ' + fmtDay(D.lastImport.bp, true) : 'Fichier .xlsx « Mes prêts »'}</span></span></span><span class="m xs mu">.xlsx</span><input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="sr" data-action="import-xlsx"></label>
     <button type="button" class="setrow" data-action="export"><span style="display:flex;align-items:center;gap:12px">${svg('dl', 22, 1.8)}<span class="stack" style="gap:1px"><span>Exporter une sauvegarde</span><span class="xs mu">Fichier .json à garder hors du téléphone</span></span></span><span class="m xs mu">.json</span></button>
     <label class="setrow" style="cursor:pointer"><span style="display:flex;align-items:center;gap:12px">${svg('up', 22, 1.8)}<span class="stack" style="gap:1px"><span>Restaurer une sauvegarde</span><span class="xs mu">Remplace les données actuelles</span></span></span><span class="m xs mu">.json</span><input type="file" accept="application/json,.json" class="sr" data-action="import"></label>
     <div class="setrow"><span class="stack" style="gap:1px"><span>Stockage persistant</span><span class="xs mu" id="persist">Vérification…</span></span><span></span></div>
     <button type="button" class="setrow" data-action="reset"><span class="c-er" style="font-weight:600">Repartir des données de départ</span><span></span></button>
   </div></section>`;
   h += `<section class="sec" style="padding-top:26px;gap:12px"><h2 class="lbl" style="margin:0">Apparence</h2><span>Thème</span>${seg('theme', D.theme, [['system', 'Système'], ['light', 'Clair'], ['dark', 'Sombre']])}<span>Animations</span>${seg('motion', D.motion, [['system', 'Système'], ['reduce', 'Réduites']])}</section>`;
-  h += `<p class="m xs mu" style="padding:24px 24px 0">Mon Épargne · v0.1 (test) · données sur cet appareil uniquement</p>`;
+  h += `<p class="m xs mu" style="padding:24px 24px 0">Mon Épargne · v0.2 · données sur cet appareil uniquement</p>`;
   setTimeout(() => {
     const el = document.getElementById('persist');
     if (!el) return;
@@ -658,6 +661,7 @@ function renderSheet() {
   if (s.type === 'inv') box.innerHTML = sheetInv(s);
   else if (s.type === 'due') box.innerHTML = sheetDue(s);
   else if (s.type === 'proj') box.innerHTML = sheetProj(s);
+  else if (s.type === 'import') box.innerHTML = sheetImport(s);
 }
 const shell = (title, sub, body, foot, label) => `<button type="button" class="scrim" data-action="close-sheet" aria-label="Fermer"></button>
   <div class="panel" role="dialog" aria-modal="true" aria-label="${esc(label || title)}"><form data-form="1" novalidate>
@@ -778,7 +782,8 @@ function sheetProj(s) {
   const st = (d) => receivedDue(d.id) ? ['ok', 'Reçue'] : d.date < TODAY ? ['er', 'Non reçue'] : ['mu', 'À venir'];
   let body = '';
   if (p.late) body += `<div class="banner er" role="alert">${svg('alert', 22, 2)}<span class="stack" style="gap:2px"><span style="font-weight:700">En retard depuis le ${fmtDay(p.late.since, true)}</span><span class="small" style="font-weight:500">${p.late.count} échéance(s) non reçue(s) · ${eur(p.late.amount)}</span></span></div>`;
-  body += `<div class="tot3" style="border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)"><div><span class="lbl" style="font-size:10px">Investi</span><span class="v">${money(p.amount)}</span></div><div><span class="lbl" style="font-size:10px">Capital restant</span><span class="v">${cl === null || cl === undefined ? '<span class="mu" style="font-size:14px">à saisir</span>' : money(cl)}</span></div><div><span class="lbl" style="font-size:10px">Intérêts reçus</span><span class="v">${p.received !== undefined ? money(p.received) : '<span class="mu" style="font-size:14px">—</span>'}</span></div></div>`;
+  body += `<div class="tot3" style="border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)"><div><span class="lbl" style="font-size:10px">Investi</span><span class="v">${money(p.amount)}</span></div><div><span class="lbl" style="font-size:10px">Capital restant</span><span class="v">${cl === null || cl === undefined ? '<span class="mu" style="font-size:14px">à saisir</span>' : money(cl)}</span></div><div><span class="lbl" style="font-size:10px">Intérêts reçus</span><span class="v">${p.received !== undefined ? money(p.received) : p.receivedNet !== undefined && p.receivedNet !== null ? money(p.receivedNet) + '<span class="xs mu" style="display:block;font-weight:500">nets</span>' : '<span class="mu" style="font-size:14px">—</span>'}</span></div></div>`;
+  if (p.company || p.contrat) body += `<div class="xs mu">${p.company ? esc(p.company) : ''}${p.company && p.contrat ? ' · ' : ''}${p.contrat ? 'contrat ' + esc(p.contrat) : ''}${p.status === 'attente' ? ' · en attente de clôture' : ''}</div>`;
   body += `<div class="stack" style="gap:8px">
     ${p.late ? `<button type="button" class="btn sec2 full" data-action="proj-normal" style="color:var(--ok);border-color:var(--ok)">${svg('check', 18, 2.2)}Revenu à la normale</button>` : `<button type="button" class="btn sec2 full" data-action="proj-late">${svg('clock', 18, 2)}Signaler un retard</button>`}
     ${p.status !== 'rembourse' ? `<button type="button" class="btn sec2 full" data-action="proj-repaid">Marquer comme remboursé</button>` : ''}
@@ -844,6 +849,14 @@ document.addEventListener('click', (e) => {
     });
   } else if (a === 'unsave') { D.months[UI.month].saved = false; UI.step = order.length; save(); render(); }
   else if (a === 'export') exportData();
+  else if (a === 'do-import') {
+    const items = UI.sheet.plan.items; UI.sheet = null;
+    withUndo(`${items.length} prêts BienPrêter importés`, () => applyImport(items));
+  } else if (a === 'mark-all') {
+    const k = UI.month, pf = order[UI.step];
+    const ids = calc(k, pf).dues.filter((d) => !draft(k, pf, false).rec[d.id]).map((d) => d.id);
+    withUndo(`${ids.length} échéance(s) marquée(s) reçue(s)`, () => { const dr = draft(k, pf, true); ids.forEach((id) => { dr.rec[id] = true; }); });
+  }
   else if (a === 'reset') {
     if (confirm('Effacer toutes tes saisies et repartir des données de départ ?')) withUndo('Données réinitialisées', () => { D = seed(); });
   } else if (a === 'proj-normal') { const id = UI.sheet.id; UI.sheet = null; withUndo('Revenu à la normale', () => { delete PROJ(id).late; }); }
@@ -862,6 +875,7 @@ document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.check) { markDue(el.dataset.check, el.checked); return; }
   if (el.dataset.action === 'import') { importData(el.files[0]); el.value = ''; return; }
+  if (el.dataset.action === 'import-xlsx') { handleXlsx(el.files[0]); el.value = ''; return; }
   if (el.dataset.f) {
     const sec = el.closest('[data-k]');
     const dr = draft(sec.dataset.k, sec.dataset.pf, true);
@@ -948,6 +962,145 @@ function importData(file) {
     } catch (err) { toast('Fichier non reconnu', { error: true }); }
   };
   rd.readAsText(file);
+}
+
+// ---------------------------------------------------------------- Import d'un export Excel (BienPrêter)
+const normKey = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function loadXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'vendor/xlsx.full.min.js';
+    s.onload = () => res(window.XLSX);
+    s.onerror = () => rej(new Error('lecteur Excel indisponible'));
+    document.head.appendChild(s);
+  });
+}
+const numLoose = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return v;
+  const p = parseAmt(String(v));
+  return p === null || Number.isNaN(p) ? null : p;
+};
+function dateLoose(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number' && window.XLSX) { const d = window.XLSX.SSF.parse_date_code(v); return d ? `${d.y}-${pad(d.m)}-${pad(d.d)}` : null; }
+  if (v instanceof Date) return isoLocal(v);
+  return parseFrDate(String(v).trim());
+}
+/** Lit les lignes d'un export « Mes prêts » de BienPrêter. */
+function parseBP(rows) {
+  const hdr = (rows[0] || []).map(normKey);
+  const col = (k) => hdr.indexOf(k);
+  const need = ['ncontrat', 'projet', 'montant', 'taux', 'capitalrestantdu', 'mensualite', 'statut'];
+  const missing = need.filter((k) => col(k) < 0);
+  if (missing.length) return { error: 'Colonnes manquantes : ' + missing.join(', ') };
+  const get = (r, k) => (col(k) >= 0 ? r[col(k)] : null);
+  const items = rows.slice(1).filter((r) => r && get(r, 'ncontrat')).map((r) => {
+    const st = String(get(r, 'statut') || '');
+    return {
+      contrat: String(get(r, 'ncontrat')).trim(),
+      name: String(get(r, 'projet') || '').trim(),
+      company: String(get(r, 'entreprise') || '').trim(),
+      amount: numLoose(get(r, 'montant')) || 0,
+      rate: numLoose(get(r, 'taux')) || 0,
+      capLeft: numLoose(get(r, 'capitalrestantdu')) || 0,
+      months: numLoose(get(r, 'dureederemboursementsmois')),
+      start: dateLoose(get(r, 'datedefinancement')),
+      end: dateLoose(get(r, 'datedecloture')),
+      monthly: numLoose(get(r, 'mensualite')) || 0,
+      next: dateLoose(get(r, 'prochaine')),
+      status: /rembours/i.test(st) ? 'rembourse' : /attente/i.test(st) ? 'attente' : 'en_cours',
+      statusRaw: st,
+      netRec: numLoose(get(r, 'interetsnetspercus')),
+      capRec: numLoose(get(r, 'capitalpercu'))
+    };
+  });
+  if (!items.length) return { error: 'Aucun prêt trouvé dans le fichier.' };
+  return { items };
+}
+/** Échéances futures d'un prêt BienPrêter (intérêts mensuels, capital à la clôture). */
+function bpDues(p, it) {
+  const out = [];
+  let first = null, monthly = it.monthly;
+  if (it.status === 'en_cours') first = it.next;
+  else if (it.status === 'attente' && it.start && it.end) {
+    first = addMonthsISO(it.start.slice(0, 8) + it.end.slice(8, 10), 1);
+    monthly = r2(it.amount * it.rate / 1200);
+  }
+  if (!first || !it.end || first > it.end) return out;
+  const capital = it.status === 'attente' ? it.amount : it.capLeft;
+  for (let d = first, i = 0; d <= it.end && i < 240; d = addMonthsISO(d, 1), i++) out.push({ date: d, int: monthly, cap: 0 });
+  if (out.length) out[out.length - 1].cap = capital;
+  return out.filter((d) => d.date >= TODAY).map((d) => ({ id: `d-${p.id}-${d.date}`, date: d.date, pf: 'bp', project: p.id, label: p.name, int: d.int, cap: d.cap }));
+}
+function matchBP(it) {
+  return D.projects.find((p) => p.pf === 'bp' && (p.contrat === it.contrat || (!p.contrat && normKey(p.name) === normKey(it.name))));
+}
+function planImport(items) {
+  const enc = items.filter((x) => x.status === 'en_cours');
+  const nextDate = enc.map((x) => x.next).filter(Boolean).sort()[0] || null;
+  return {
+    items,
+    counts: { total: items.length, enc: enc.length, att: items.filter((x) => x.status === 'attente').length, rem: items.filter((x) => x.status === 'rembourse').length },
+    capLeft: r2(sum(enc, 'capLeft')),
+    nextDate,
+    nextSum: r2(sum(enc.filter((x) => x.next === nextDate), 'monthly')),
+    netRec: r2(sum(items, (x) => x.netRec || 0)),
+    matched: items.filter((x) => matchBP(x)).map((x) => x.name),
+    noDates: items.filter((x) => x.status === 'attente' && !(x.start && x.end)).map((x) => x.name)
+  };
+}
+function applyImport(items) {
+  // Les échéances BienPrêter « globales » à venir sont remplacées par le détail prêt par prêt.
+  D.dues = D.dues.filter((d) => !(d.pf === 'bp' && !d.project && d.date >= TODAY && !receivedDue(d.id)));
+  for (const it of items) {
+    let p = matchBP(it);
+    if (!p) { p = { id: 'bp-' + normKey(it.contrat).slice(-10), pf: 'bp', own: false }; D.projects.push(p); }
+    Object.assign(p, {
+      contrat: it.contrat, name: it.name, company: it.company, amount: it.amount, rate: it.rate, type: 'mens',
+      start: it.start || p.start || null, end: it.end || p.end || null,
+      status: it.status, capLeft: it.status === 'rembourse' ? 0 : it.status === 'attente' ? it.amount : it.capLeft,
+      receivedNet: it.netRec, imported: TODAY
+    });
+    delete p.received;
+    D.dues = D.dues.filter((d) => !(d.project === p.id && d.date >= TODAY && !receivedDue(d.id)));
+    if (it.status !== 'rembourse') {
+      const have = new Set(D.dues.map((d) => d.id));
+      D.dues.push(...bpDues(p, it).filter((d) => !have.has(d.id)));
+    }
+  }
+  D.lastImport = { bp: TODAY };
+}
+async function handleXlsx(file) {
+  if (!file) return;
+  try {
+    const XLSX = await loadXLSX();
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
+    const res = parseBP(rows);
+    if (res.error) { toast('Fichier non reconnu · ' + res.error, { error: true }); return; }
+    UI.sheet = { type: 'import', plan: planImport(res.items) };
+    renderSheet();
+  } catch (err) {
+    toast('Lecture impossible : ' + err.message, { error: true });
+  }
+}
+function sheetImport(s) {
+  const P = s.plan;
+  const body = `<p class="small" style="margin:0">Export « Mes prêts » reconnu. Voici ce qui va changer :</p>
+    <div class="tot3" style="border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)"><div><span class="lbl" style="font-size:10px">En cours</span><span class="v">${P.counts.enc}</span></div><div><span class="lbl" style="font-size:10px">En attente</span><span class="v">${P.counts.att}</span></div><div><span class="lbl" style="font-size:10px">Remboursés</span><span class="v">${P.counts.rem}</span></div></div>
+    <div><div class="kv"><span>Capital restant dû (en cours)</span><strong>${eur(P.capLeft)}</strong></div>
+    ${P.nextDate ? `<div class="kv"><span>Prochaine échéance</span><strong>${eur(P.nextSum)} le ${fmtDay(P.nextDate)}</strong></div>` : ''}
+    <div class="kv"><span>Intérêts nets déjà perçus</span><strong>${eur(P.netRec)}</strong></div></div>
+    <ul class="small" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">
+      <li>Chaque prêt devient un projet, avec ses échéances jusqu'à la clôture.</li>
+      <li>Les échéances BienPrêter globales à venir sont remplacées par le détail prêt par prêt. Tes mois déjà enregistrés ne changent pas.</li>
+      ${P.matched.length ? `<li>Mis à jour plutôt que dupliqués : ${P.matched.map(esc).join(', ')}.</li>` : ''}
+      ${P.noDates.length ? `<li>Sans date de financement pour l'instant (pas d'échéances créées) : ${P.noDates.map(esc).join(', ')}. Réimporte après la clôture.</li>` : ''}
+    </ul>
+    <p class="xs mu" style="margin:0">Tu pourras annuler pendant 5 secondes.</p>`;
+  return shell('Importer BienPrêter', pfSub('bp'), body, `<button type="button" class="btn sec2" data-action="close-sheet">Annuler</button><button type="button" class="btn pri" data-action="do-import">Importer ${P.counts.total} prêts</button>`);
 }
 
 // ---------------------------------------------------------------- Démarrage
