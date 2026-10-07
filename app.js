@@ -1,4 +1,4 @@
-/* Mon Épargne — v0.2
+/* Mon Épargne — v0.3
  * Application web locale : toutes les données restent dans le navigateur du téléphone (localStorage).
  */
 'use strict';
@@ -635,14 +635,14 @@ function viewSettings() {
     <span class="xs mu" style="padding-top:8px">Ajouter, renommer ou archiver une plateforme : prochaine version.</span></section>`;
   h += `<section class="sec" style="padding-top:26px"><h2 class="lbl" style="margin:0 0 6px">Fiscalité</h2><div class="kv" style="border-top:1px solid var(--ln)"><span>Mode d'imposition</span><strong>Flat tax · 31,4 %</strong></div><button type="button" class="setrow" data-go="impots"><span>Impôts ${TODAY.slice(0, 4)}</span><span class="mu">${svg('right')}</span></button></section>`;
   h += `<section class="sec" style="padding-top:26px"><h2 class="lbl" style="margin:0 0 6px">Données</h2><div style="border-top:1px solid var(--ln)">
-    <label class="setrow" style="cursor:pointer"><span style="display:flex;align-items:center;gap:12px">${svg('up', 22, 1.8)}<span class="stack" style="gap:1px"><span>Importer un export BienPrêter</span><span class="xs mu">${D.lastImport && D.lastImport.bp ? 'Dernier import : ' + fmtDay(D.lastImport.bp, true) : 'Fichier .xlsx « Mes prêts »'}</span></span></span><span class="m xs mu">.xlsx</span><input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="sr" data-action="import-xlsx"></label>
+    <label class="setrow" style="cursor:pointer"><span style="display:flex;align-items:center;gap:12px">${svg('up', 22, 1.8)}<span class="stack" style="gap:1px"><span>Importer un export Excel</span><span class="xs mu">BienPrêter ou La Première Brique${D.lastImport ? ' · dernier : ' + Object.entries(D.lastImport).map(([k, v]) => PF(k).short + ' ' + fmtDay(v)).join(', ') : ''}</span></span></span><span class="m xs mu">.xlsx</span><input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="sr" data-action="import-xlsx"></label>
     <button type="button" class="setrow" data-action="export"><span style="display:flex;align-items:center;gap:12px">${svg('dl', 22, 1.8)}<span class="stack" style="gap:1px"><span>Exporter une sauvegarde</span><span class="xs mu">Fichier .json à garder hors du téléphone</span></span></span><span class="m xs mu">.json</span></button>
     <label class="setrow" style="cursor:pointer"><span style="display:flex;align-items:center;gap:12px">${svg('up', 22, 1.8)}<span class="stack" style="gap:1px"><span>Restaurer une sauvegarde</span><span class="xs mu">Remplace les données actuelles</span></span></span><span class="m xs mu">.json</span><input type="file" accept="application/json,.json" class="sr" data-action="import"></label>
     <div class="setrow"><span class="stack" style="gap:1px"><span>Stockage persistant</span><span class="xs mu" id="persist">Vérification…</span></span><span></span></div>
     <button type="button" class="setrow" data-action="reset"><span class="c-er" style="font-weight:600">Repartir des données de départ</span><span></span></button>
   </div></section>`;
   h += `<section class="sec" style="padding-top:26px;gap:12px"><h2 class="lbl" style="margin:0">Apparence</h2><span>Thème</span>${seg('theme', D.theme, [['system', 'Système'], ['light', 'Clair'], ['dark', 'Sombre']])}<span>Animations</span>${seg('motion', D.motion, [['system', 'Système'], ['reduce', 'Réduites']])}</section>`;
-  h += `<p class="m xs mu" style="padding:24px 24px 0">Mon Épargne · v0.2 · données sur cet appareil uniquement</p>`;
+  h += `<p class="m xs mu" style="padding:24px 24px 0">Mon Épargne · v0.3 · données sur cet appareil uniquement</p>`;
   setTimeout(() => {
     const el = document.getElementById('persist');
     if (!el) return;
@@ -850,8 +850,9 @@ document.addEventListener('click', (e) => {
   } else if (a === 'unsave') { D.months[UI.month].saved = false; UI.step = order.length; save(); render(); }
   else if (a === 'export') exportData();
   else if (a === 'do-import') {
-    const items = UI.sheet.plan.items; UI.sheet = null;
-    withUndo(`${items.length} prêts BienPrêter importés`, () => applyImport(items));
+    const { pf, plan } = UI.sheet; UI.sheet = null;
+    if (pf === 'lpb') withUndo(`${plan.items.length} projets La Première Brique importés`, () => applyLPB(plan.items));
+    else withUndo(`${plan.items.length} prêts BienPrêter importés`, () => applyImport(plan.items));
   } else if (a === 'mark-all') {
     const k = UI.month, pf = order[UI.step];
     const ids = calc(k, pf).dues.filter((d) => !draft(k, pf, false).rec[d.id]).map((d) => d.id);
@@ -1070,23 +1071,147 @@ function applyImport(items) {
       D.dues.push(...bpDues(p, it).filter((d) => !have.has(d.id)));
     }
   }
-  D.lastImport = { bp: TODAY };
+  D.lastImport = { ...(D.lastImport || {}), bp: TODAY };
 }
+// ---- La Première Brique : feuilles « Mes prêts - Opération » + « Mes revenus »
+const cleanName = (s) => String(s ?? '').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
+function parseLPB(XLSX, wb) {
+  const opName = wb.SheetNames.find((n) => normKey(n).startsWith('mesprets') && normKey(n).includes('operation'));
+  const revName = wb.SheetNames.find((n) => normKey(n) === 'mesrevenus');
+  if (!opName || !revName) return { error: 'feuilles « Mes prêts - Opération » et « Mes revenus » introuvables' };
+  const read = (n) => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null });
+  const op = read(opName), rev = read(revName);
+  const hi = op.findIndex((r) => r && r.some((c) => normKey(c) === 'nomduprojet'));
+  const ri = rev.findIndex((r) => r && r.some((c) => normKey(c) === 'projet') && r.some((c) => normKey(c).startsWith('datedecheance')));
+  if (hi < 0 || ri < 0) return { error: 'en-têtes introuvables' };
+  const mk = (row) => { const h = row.map(normKey); return (k) => h.findIndex((x) => x.startsWith(k)); };
+  const c1 = mk(op[hi]), c2 = mk(rev[ri]);
+  const need1 = ['nomduprojet', 'statut', 'montantinvesti', 'tauxannuel', 'dontcapital', 'dontinterets'], need2 = ['projet', 'statut', 'montantapayer', 'partducapital', 'datedecheance'];
+  const miss = [...need1.filter((k) => c1(k) < 0), ...need2.filter((k) => c2(k) < 0)];
+  if (miss.length) return { error: 'colonnes manquantes : ' + miss.join(', ') };
+  const projects = new Map();
+  for (const r of op.slice(hi + 1)) {
+    if (!r || !r[c1('nomduprojet')]) continue;
+    const name = cleanName(r[c1('nomduprojet')]), key = normKey(name);
+    const amt = numLoose(r[c1('montantinvesti')]) || 0;
+    const p = projects.get(key) || { key, name, amount: 0, parts: [], capRep: 0, intRec: 0, rate: 0, start: null, end: null, endMin: null, statuses: [], dues: new Map() };
+    p.amount = r2(p.amount + amt); p.parts.push(amt);
+    p.rate = numLoose(r[c1('tauxannuel')]) || p.rate;
+    p.capRep = r2(p.capRep + (numLoose(r[c1('dontcapital')]) || 0));
+    p.intRec = r2(p.intRec + (numLoose(r[c1('dontinterets')]) || 0));
+    const sd = c1('datedesignature') >= 0 ? dateLoose(r[c1('datedesignature')]) : null;
+    const ed = c1('datederemboursementmaximale') >= 0 ? dateLoose(r[c1('datederemboursementmaximale')]) : null;
+    const em = c1('datederemboursementminimale') >= 0 ? dateLoose(r[c1('datederemboursementminimale')]) : null;
+    if (sd && (!p.start || sd < p.start)) p.start = sd;
+    if (ed && (!p.end || ed > p.end)) p.end = ed;
+    if (em && (!p.endMin || em > p.endMin)) p.endMin = em;
+    p.statuses.push(String(r[c1('statut')] || ''));
+    projects.set(key, p);
+  }
+  for (const r of rev.slice(ri + 1)) {
+    if (!r || !r[c2('projet')]) continue;
+    const key = normKey(cleanName(r[c2('projet')]));
+    const p = projects.get(key);
+    const date = dateLoose(r[c2('datedecheance')]);
+    const amount = numLoose(r[c2('montantapayer')]) || 0;
+    if (!p || !date || amount <= 0) continue;   // échéances à 0 € : intérêts capitalisés, rien à recevoir
+    const cap = numLoose(r[c2('partducapital')]) || 0;
+    const paid = /pay/i.test(String(r[c2('statut')] || ''));
+    const d = p.dues.get(date) || { date, amount: 0, cap: 0, paid: true };
+    d.amount = r2(d.amount + amount); d.cap = r2(d.cap + cap); d.paid = d.paid && paid;
+    p.dues.set(date, d);
+  }
+  const items = [...projects.values()].map((p) => {
+    const dues = [...p.dues.values()].sort((a, b) => a.date.localeCompare(b.date)).map((d) => ({ ...d, int: r2(d.amount - d.cap) }));
+    const lateD = dues.filter((d) => !d.paid && d.date < TODAY);
+    const repaid = p.statuses.every((s) => /rembours/i.test(s));
+    const withAmt = dues.filter((d) => d.amount > 0);
+    const type = withAmt.length <= 1 ? 'fine' : withAmt.slice(0, -1).some((d) => d.cap > 0) ? 'amort' : 'mens';
+    return {
+      key: p.key, name: p.name, amount: p.amount, parts: p.parts, rate: p.rate, start: p.start, end: p.end, endMin: p.endMin,
+      status: repaid ? 'rembourse' : 'en_cours', capLeft: repaid ? 0 : r2(p.amount - p.capRep), received: p.intRec, type, dues,
+      late: lateD.length ? { count: lateD.length, amount: r2(sum(lateD, 'amount')), since: lateD[0].date } : null
+    };
+  });
+  return { items };
+}
+function planLPB(items) {
+  const enc = items.filter((x) => x.status === 'en_cours');
+  const fut = enc.flatMap((x) => x.dues.filter((d) => d.date >= TODAY));
+  const nextDate = fut.map((d) => d.date).sort()[0] || null;
+  const late = items.filter((x) => x.late);
+  return {
+    items,
+    counts: { enc: enc.length, rem: items.filter((x) => x.status === 'rembourse').length, late: late.length },
+    capLeft: r2(sum(enc, 'capLeft')), received: r2(sum(items, 'received')),
+    nextDate, nextSum: r2(sum(fut.filter((d) => d.date === nextDate), 'amount')),
+    lateCount: sum(late, (x) => x.late.count), lateAmount: r2(sum(late, (x) => x.late.amount)),
+    futureCount: fut.length,
+    matched: items.filter((x) => D.projects.some((p) => p.pf === 'lpb' && normKey(p.name) === x.key)).length
+  };
+}
+function applyLPB(items) {
+  const cur = monthOf(TODAY);
+  const keep = (date) => date >= TODAY || (monthOf(date) === cur && !isSaved(cur));
+  for (const it of items) {
+    let p = D.projects.find((x) => x.pf === 'lpb' && normKey(x.name) === it.key);
+    if (!p) { p = { id: 'lpb-' + it.key.slice(0, 24), pf: 'lpb', own: false }; D.projects.push(p); }
+    Object.assign(p, {
+      name: it.name, amount: it.amount, rate: it.rate, type: it.type, start: it.start, end: it.end, endMin: it.endMin,
+      status: it.status, capLeft: it.capLeft, received: it.received, imported: TODAY,
+      note: it.parts.length > 1 ? it.parts.map((x) => eur(x).replace(',00', '')).join(' + ') : undefined
+    });
+    if (it.late && it.status !== 'rembourse') p.late = it.late; else delete p.late;
+    D.dues = D.dues.filter((d) => !(d.project === p.id && !receivedDue(d.id) && keep(d.date)));
+    if (it.status === 'rembourse') continue;
+    for (const d of it.dues) {
+      if (!keep(d.date) || D.dues.some((x) => x.project === p.id && x.date === d.date)) continue;
+      const id = `d-${p.id}-${d.date}`;
+      D.dues.push({ id, date: d.date, pf: 'lpb', project: p.id, label: p.name, int: d.int, cap: d.cap });
+      if (d.paid && !isSaved(monthOf(d.date))) draft(monthOf(d.date), 'lpb', true).rec[id] = true;
+    }
+  }
+  D.lastImport = { ...(D.lastImport || {}), lpb: TODAY };
+}
+
 async function handleXlsx(file) {
   if (!file) return;
   try {
     const XLSX = await loadXLSX();
     const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
-    const res = parseBP(rows);
-    if (res.error) { toast('Fichier non reconnu · ' + res.error, { error: true }); return; }
-    UI.sheet = { type: 'import', plan: planImport(res.items) };
+    if (wb.SheetNames.some((n) => normKey(n) === 'mesrevenus')) {
+      const res = parseLPB(XLSX, wb);
+      if (res.error) { toast('Fichier non reconnu · ' + res.error, { error: true }); return; }
+      UI.sheet = { type: 'import', pf: 'lpb', plan: planLPB(res.items) };
+    } else {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
+      const res = parseBP(rows);
+      if (res.error) { toast('Fichier non reconnu · ' + res.error, { error: true }); return; }
+      UI.sheet = { type: 'import', pf: 'bp', plan: planImport(res.items) };
+    }
     renderSheet();
   } catch (err) {
     toast('Lecture impossible : ' + err.message, { error: true });
   }
 }
+function sheetImportLPB(s) {
+  const P = s.plan;
+  const body = `<p class="small" style="margin:0">Export La Première Brique reconnu (prêts + échéancier). Voici ce qui va changer :</p>
+    <div class="tot3" style="border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)"><div><span class="lbl" style="font-size:10px">En cours</span><span class="v">${P.counts.enc}</span></div><div><span class="lbl" style="font-size:10px">En retard</span><span class="v c-er">${P.counts.late}</span></div><div><span class="lbl" style="font-size:10px">Remboursés</span><span class="v">${P.counts.rem}</span></div></div>
+    <div><div class="kv"><span>Capital restant dû (en cours)</span><strong>${eur(P.capLeft)}</strong></div>
+    ${P.nextDate ? `<div class="kv"><span>Prochaine échéance</span><strong>${eur(P.nextSum)} le ${fmtDay(P.nextDate)}</strong></div>` : ''}
+    <div class="kv"><span>Intérêts bruts déjà reçus</span><strong>${eur(P.received)}</strong></div>
+    <div class="kv"><span>Échéances en retard</span><strong class="c-er">${P.lateCount} · ${eur(P.lateAmount)}</strong></div></div>
+    <ul class="small" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">
+      <li>${P.futureCount} échéances à venir ajoutées (les échéances à 0 € des projets in fine sont ignorées).</li>
+      <li>Retards, capital restant, dates de fin et intérêts reçus mis à jour pour ${P.matched} projet(s) existant(s).</li>
+      <li>Tes mois déjà enregistrés ne changent pas.</li>
+    </ul>
+    <p class="xs mu" style="margin:0">Tu pourras annuler pendant 5 secondes.</p>`;
+  return shell('Importer La Première Brique', pfSub('lpb'), body, `<button type="button" class="btn sec2" data-action="close-sheet">Annuler</button><button type="button" class="btn pri" data-action="do-import">Importer ${P.items.length} projets</button>`);
+}
 function sheetImport(s) {
+  if (s.pf === 'lpb') return sheetImportLPB(s);
   const P = s.plan;
   const body = `<p class="small" style="margin:0">Export « Mes prêts » reconnu. Voici ce qui va changer :</p>
     <div class="tot3" style="border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)"><div><span class="lbl" style="font-size:10px">En cours</span><span class="v">${P.counts.enc}</span></div><div><span class="lbl" style="font-size:10px">En attente</span><span class="v">${P.counts.att}</span></div><div><span class="lbl" style="font-size:10px">Remboursés</span><span class="v">${P.counts.rem}</span></div></div>
