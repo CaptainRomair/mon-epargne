@@ -1,4 +1,4 @@
-/* Mon Épargne — v0.3
+/* Mon Épargne — v0.4
  * Application web locale : toutes les données restent dans le navigateur du téléphone (localStorage).
  */
 'use strict';
@@ -200,12 +200,16 @@ function pfDelta(pfId, upTo) {
   }
   return r2(s);
 }
-const pfValue = (pfId, upTo) => r2(PF(pfId).base + pfDelta(pfId, upTo));
+const pfValue = (pfId, upTo) => r2(PF(pfId).base + (PF(pfId).cash0 || 0) + pfDelta(pfId, upTo));
 const patrimoine = (upTo) => r2(sum(D.platforms, (p) => pfValue(p.id, upTo)));
-function dispo(pfId) {
+/** Solde disponible calculé (sans le solde de départ). */
+function dispoFlows(pfId) {
   let s = 0;
   for (const k of savedMonths()) { const c = calc(k, pfId); s += c.verse + c.int - c.tax + c.cap - c.retire - c.invested; }
   return r2(s);
+}
+function dispo(pfId) {
+  return r2((PF(pfId).cash0 || 0) + dispoFlows(pfId));
 }
 function receivedDue(id) {
   for (const k of Object.keys(D.months)) { const m = D.months[k]; for (const p of Object.keys(m.pf)) if (m.pf[p].rec[id]) return true; }
@@ -322,7 +326,7 @@ function viewHome() {
       <span class="top"><span class="name"><span class="sw dot-${pf.id}"></span>${esc(pf.name)}</span><span class="val">${money(x.v)}</span></span>
       <span class="sub"><span>${esc(pf.kind)}</span><span>${pct((x.v / total * 100).toFixed(1))}</span></span>
       <span class="nx"><span>${nx ? `Prochaine : ${eur(dueAmount(nx))} le ${fmtDay(nx.date)}` : esc(pf.note || '—')}</span>${lt ? `<span class="c-er" style="display:flex;align-items:center;gap:4px;font-family:var(--ff);font-weight:600">${svg('alert', 14, 2.2)}${lt} retard${lt > 1 ? 's' : ''}</span>` : ''}</span>
-      ${pf.invest && savedMonths().length ? `<span class="nx mu"><span>Disponible sur le compte</span><span>${eur(dp)}</span></span>` : ''}
+      ${pf.invest && (savedMonths().length || pf.cash0) ? `<span class="nx ${dp < 0 ? 'c-wa' : 'mu'}"><span>${dp < 0 ? 'Solde négatif : à recaler dans Réglages' : 'Disponible sur le compte'}</span><span>${eur(dp)}</span></span>` : ''}
     </button>`;
   }
   h += `</section>`;
@@ -423,7 +427,7 @@ function stepPlatform(h, k, pfId, step, order) {
   h += `</section>`;
   if (pf.invest) {
     h += `<section class="sec" style="padding-top:30px" aria-label="Nouveaux investissements"><div class="sec-h"><h2 class="h3">Nouveaux investissements</h2><span class="m xs mu">${c.invs.length}</span></div>
-      ${c.invs.map((v) => `<div class="invrow"><span class="stack"><span class="t1">${esc(v.name)}</span><span class="xs mu">${eur(v.amount)} · ${pct(v.rate)} · ${TYPES[v.type].title.toLowerCase()} · ${v.months} mois</span></span><span class="chip ${v.src === 'verse' ? 'ac' : 'ok'}">${v.src === 'verse' ? 'Versement' : 'Réinvesti'}</span><button type="button" class="iconbtn" data-del-inv="${v.id}" aria-label="Retirer ${esc(v.name)}">${svg('x', 18, 2)}</button></div>`).join('')}
+      ${c.invs.map((v) => `<div class="invrow"><span class="stack"><span class="t1">${esc(v.name)}</span><span class="xs mu">${eur(v.amount)} · ${pct(v.rate)} · ${TYPES[v.type].title.toLowerCase()} · ${v.months} mois</span></span><button type="button" class="chip ${v.src === 'verse' ? 'ac' : 'ok'}" data-inv-src="${v.id}" style="border:0;min-height:32px" aria-label="Origine : ${v.src === 'verse' ? 'nouveau versement' : 'réinvesti'}. Toucher pour changer">${v.src === 'verse' ? 'Versement' : 'Réinvesti'} ⇄</button><button type="button" class="iconbtn" data-del-inv="${v.id}" aria-label="Retirer ${esc(v.name)}">${svg('x', 18, 2)}</button></div>`).join('')}
       <button type="button" class="btn sec2 full" data-action="add-inv" style="margin-top:12px;font-size:15px">${svg('plus', 18, 2.2)}Ajouter un investissement</button>
       <span class="xs mu" style="padding-top:8px">Nouvel argent versé ou intérêts réinvestis depuis ton compte.</span></section>`;
   }
@@ -631,8 +635,8 @@ function viewImpots() {
 function viewSettings() {
   const seg = (name, val, opts) => `<div class="seg" role="radiogroup" style="grid-template-columns:repeat(${opts.length},minmax(0,1fr))">${opts.map(([v, l]) => `<button type="button" role="radio" aria-checked="${val === v}" data-set="${name}" data-val="${v}">${l}</button>`).join('')}</div>`;
   let h = `<header class="pagehead"><h1 class="h1">Réglages</h1></header>`;
-  h += `<section class="sec" style="padding-top:22px"><h2 class="lbl" style="margin:0 0 6px">Plateformes</h2><div style="border-top:1px solid var(--ln)">${D.platforms.map((p) => `<div class="setrow"><span style="display:flex;align-items:center;gap:12px"><span class="sw dot-${p.id}" style="width:22px;height:22px"></span><span class="stack" style="gap:1px"><span style="font-weight:600">${esc(p.name)}</span><span class="xs mu">${esc(p.kind)}</span></span></span><span class="m xs mu">${p.taxed ? '31,4 %' : 'exonéré'}</span></div>`).join('')}</div>
-    <span class="xs mu" style="padding-top:8px">Ajouter, renommer ou archiver une plateforme : prochaine version.</span></section>`;
+  h += `<section class="sec" style="padding-top:22px"><h2 class="lbl" style="margin:0 0 6px">Plateformes</h2><div style="border-top:1px solid var(--ln)">${D.platforms.map((p) => `<button type="button" class="setrow" data-pfedit="${p.id}"><span style="display:flex;align-items:center;gap:12px"><span class="sw dot-${p.id}" style="width:22px;height:22px"></span><span class="stack" style="gap:1px"><span style="font-weight:600">${esc(p.name)}</span><span class="xs mu">${esc(p.kind)}${p.invest ? ' · disponible ' + eur(dispo(p.id)) : ''}</span></span></span><span class="mu">${svg('right')}</span></button>`).join('')}</div>
+    <span class="xs mu" style="padding-top:8px">Touche une plateforme pour recaler son solde disponible. Ajouter ou archiver une plateforme : prochaine version.</span></section>`;
   h += `<section class="sec" style="padding-top:26px"><h2 class="lbl" style="margin:0 0 6px">Fiscalité</h2><div class="kv" style="border-top:1px solid var(--ln)"><span>Mode d'imposition</span><strong>Flat tax · 31,4 %</strong></div><button type="button" class="setrow" data-go="impots"><span>Impôts ${TODAY.slice(0, 4)}</span><span class="mu">${svg('right')}</span></button></section>`;
   h += `<section class="sec" style="padding-top:26px"><h2 class="lbl" style="margin:0 0 6px">Données</h2><div style="border-top:1px solid var(--ln)">
     <label class="setrow" style="cursor:pointer"><span style="display:flex;align-items:center;gap:12px">${svg('up', 22, 1.8)}<span class="stack" style="gap:1px"><span>Importer un export Excel</span><span class="xs mu">BienPrêter ou La Première Brique${D.lastImport ? ' · dernier : ' + Object.entries(D.lastImport).map(([k, v]) => PF(k).short + ' ' + fmtDay(v)).join(', ') : ''}</span></span></span><span class="m xs mu">.xlsx</span><input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="sr" data-action="import-xlsx"></label>
@@ -642,7 +646,7 @@ function viewSettings() {
     <button type="button" class="setrow" data-action="reset"><span class="c-er" style="font-weight:600">Repartir des données de départ</span><span></span></button>
   </div></section>`;
   h += `<section class="sec" style="padding-top:26px;gap:12px"><h2 class="lbl" style="margin:0">Apparence</h2><span>Thème</span>${seg('theme', D.theme, [['system', 'Système'], ['light', 'Clair'], ['dark', 'Sombre']])}<span>Animations</span>${seg('motion', D.motion, [['system', 'Système'], ['reduce', 'Réduites']])}</section>`;
-  h += `<p class="m xs mu" style="padding:24px 24px 0">Mon Épargne · v0.3 · données sur cet appareil uniquement</p>`;
+  h += `<p class="m xs mu" style="padding:24px 24px 0">Mon Épargne · v0.4 · données sur cet appareil uniquement</p>`;
   setTimeout(() => {
     const el = document.getElementById('persist');
     if (!el) return;
@@ -662,6 +666,7 @@ function renderSheet() {
   else if (s.type === 'due') box.innerHTML = sheetDue(s);
   else if (s.type === 'proj') box.innerHTML = sheetProj(s);
   else if (s.type === 'import') box.innerHTML = sheetImport(s);
+  else if (s.type === 'pf') box.innerHTML = sheetPf(s);
 }
 const shell = (title, sub, body, foot, label) => `<button type="button" class="scrim" data-action="close-sheet" aria-label="Fermer"></button>
   <div class="panel" role="dialog" aria-modal="true" aria-label="${esc(label || title)}"><form data-form="1" novalidate>
@@ -794,6 +799,36 @@ function sheetProj(s) {
   return shell(esc(p.name), sub, body, '', p.name);
 }
 
+function pfCashPlan(s) {
+  const x = parseAmt(s.cash);
+  if (x === null || Number.isNaN(x)) return null;
+  const cash0 = r2(x - dispoFlows(s.pf));
+  const before = pfValue(s.pf);
+  const after = r2(before - (PF(s.pf).cash0 || 0) + cash0);
+  return { cash0, before, after };
+}
+function pfCashPreview(s) {
+  const P = pfCashPlan(s);
+  if (!P) return '<span class="small c-er" style="font-weight:600">Montant invalide</span>';
+  return `<div class="preview"><span class="lbl" style="font-size:10px;color:var(--ac)">Aperçu · calculé</span><span class="small">Solde au départ du suivi (${fmtDay(D.base, true)}) : <strong>${eur(P.cash0)}</strong></span><span style="font-size:15px;font-weight:700">Valeur ${esc(PF(s.pf).name)} : ${eur(P.before)} → ${eur(P.after)}</span></div>`;
+}
+function sheetPf(s) {
+  const pf = PF(s.pf);
+  if (!pf.invest) return shell(esc(pf.name), pfSub(pf.id), `<p class="small mu" style="margin:0">${esc(pf.kind)}. Rien à recaler pour un livret : sa valeur suit les versements, retraits et intérêts saisis chaque mois.</p>`, '');
+  const body = `<p class="small" style="margin:0">L'argent <strong>non investi</strong> qui dort sur ton compte compte aussi dans ton patrimoine. Recopie le solde disponible affiché aujourd'hui sur ${esc(pf.name)} : l'app en déduit le solde de départ, en tenant compte des mois déjà enregistrés.</p>
+    <div class="fld"><label for="s-cash">Solde disponible aujourd'hui</label><input id="s-cash" class="in" inputmode="decimal" autocomplete="off" placeholder="0,00 €" data-s="cash" value="${esc(s.cash)}"></div>
+    <div id="preview">${pfCashPreview(s)}</div>
+    <p class="xs mu" style="margin:0">Capital investi au départ : ${eur(pf.base)}. Solde de départ actuel : ${eur(pf.cash0 || 0)}.</p>`;
+  return shell(esc(pf.name), pfSub(pf.id), body, `<button type="button" class="btn sec2" data-action="close-sheet">Annuler</button><button type="submit" class="btn pri">Enregistrer</button>`);
+}
+function submitPf() {
+  const s = UI.sheet;
+  const P = pfCashPlan(s);
+  if (!P) return;
+  UI.sheet = null;
+  withUndo(`Solde ${PF(s.pf).name} recalé`, () => { PF(s.pf).cash0 = P.cash0; });
+}
+
 // ---------------------------------------------------------------- Actions
 function markDue(id, v) {
   const d = D.dues.find((x) => x.id === id);
@@ -825,6 +860,12 @@ document.addEventListener('click', (e) => {
     const sec = t.closest('[data-k]'); draft(sec.dataset.k, sec.dataset.pf, true)[ds.reset] = null; save(); refreshNumbers(); return;
   }
   if (ds.delInv) { removeInv(ds.delInv); return; }
+  if (ds.invSrc) {
+    const v = D.invs.find((x) => x.id === ds.invSrc);
+    if (v) { v.src = v.src === 'verse' ? 'reinv' : 'verse'; save(); render(); toast(`${v.name} : ${v.src === 'verse' ? 'nouveau versement' : 'réinvesti'}`); }
+    return;
+  }
+  if (ds.pfedit) { const pf = PF(ds.pfedit); UI.sheet = { type: 'pf', pf: pf.id, cash: eur(dispo(pf.id)) }; renderSheet(); return; }
   if (ds.set) { D[ds.set] = ds.val; save(); render(); return; }
   if (ds.sKind) { UI.sheet.kind = ds.sKind; renderSheet(); return; }
   if (ds.sSrc) { UI.sheet.src = ds.sSrc; renderSheet(); return; }
@@ -902,6 +943,7 @@ document.addEventListener('input', (e) => {
       if (v) for (const [key, bad] of Object.entries(v)) { const sp = document.querySelector(`[data-err="${key}"]`); if (sp) sp.hidden = !bad; }
     }
     if (UI.sheet.type === 'inv') document.getElementById('preview').innerHTML = invPreview(UI.sheet);
+    if (UI.sheet.type === 'pf') document.getElementById('preview').innerHTML = pfCashPreview(UI.sheet);
   } else if (el.dataset.projIn) {
     UI.proj[el.dataset.projIn] = el.value;
     document.getElementById('proj-out').innerHTML = projOut(projCalc());
@@ -911,7 +953,7 @@ document.addEventListener('focusin', (e) => { const el = e.target; if (el.matche
 document.addEventListener('submit', (e) => {
   e.preventDefault();
   if (!UI.sheet) return;
-  if (UI.sheet.type === 'inv') submitInv(); else if (UI.sheet.type === 'due') submitDue();
+  if (UI.sheet.type === 'inv') submitInv(); else if (UI.sheet.type === 'due') submitDue(); else if (UI.sheet.type === 'pf') submitPf();
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && UI.sheet) { UI.sheet = null; renderSheet(); } });
 
